@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+config.ini
+.env
+.env.*
+.agents/
+.codex/
+
+# Runtime artifacts
+logs/
+*.log
+output/
+
+# Build artifacts
+build/
+dist/
+*.spec
+installer/Output/
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
