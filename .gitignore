@@ -22,6 +22,7 @@ config.ini
 logs/
 *.log
 output/
+app_state.json
 
 # Build artifacts
 build/

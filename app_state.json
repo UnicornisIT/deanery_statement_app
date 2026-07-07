@@ -1,8 +1,14 @@
 {
   "subject": "Химия",
-  "group": "СД-232",
-  "specialty": "Сестринское дело",
-  "teacher": "Петрова Ирина",
+  "group": "СтД-232",
+  "specialty": "Стоматологое дело",
+  "teacher": "Бибаева",
+  "semester": "8",
+  "academic_year": "2026/2027",
+  "control_form": "Дифференцированный зачёт",
+  "exam_date": "19.06.2026",
+  "department_head": "Козлитина Светлана Геннадьевна",
   "include_percent": false,
-  "template_path": "C:\\Users\\EA-work\\Documents\\docx_to_moodle_app\\deanery_statement_app\\app\\templates\\statement_template_diff.docx"
+  "template_path_ifo": "C:\\Users\\EA-work\\Documents\\docx_to_moodle_app\\deanery_statement_app\\app\\templates\\statement_template_ifo_diff.docx",
+  "template_path": "C:\\Users\\EA-work\\Documents\\docx_to_moodle_app\\deanery_statement_app\\app\\templates\\statement_template_ifo_diff.docx"
 }

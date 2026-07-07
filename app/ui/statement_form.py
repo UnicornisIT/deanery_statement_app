@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from functools import partial
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QCompleter,
+    QDateEdit,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -43,11 +44,12 @@ class StatementForm(QGroupBox):
         self.group_combo = self._combo()
         self.specialty_combo = self._combo()
         self.teacher_combo = self._combo()
-        self.semester_edit = self._line_edit()
-        self.academic_year_edit = self._line_edit()
-        self.control_form_edit = self._line_edit("диф.зачет")
-        self.exam_date_edit = self._line_edit()
-        self.department_head_edit = self._line_edit()
+        self.semester_combo = self._combo()
+        self.academic_year_combo = self._combo()
+        self.control_form_combo = self._combo()
+        self.exam_date_edit = self._date_edit()
+        self.department_head_combo = self._combo()
+        self.control_form_combo.setEditText("диф.зачет")
         self.ofo_widgets: list[QWidget] = []
         self.moodle_filter_values: list[str] = []
         self.selected_moodle_filters: set[str] = set()
@@ -73,26 +75,31 @@ class StatementForm(QGroupBox):
         self.include_percent_checkbox = QCheckBox("Добавлять проценты в итоговую ведомость")
         self.include_percent_checkbox.setChecked(False)
 
-        layout = QGridLayout(self)
-        layout.setContentsMargins(18, 22, 18, 16)
-        layout.setHorizontalSpacing(14)
-        layout.setVerticalSpacing(10)
-        layout.setColumnStretch(0, 0)
-        layout.setColumnStretch(1, 1)
-        layout.setColumnStretch(2, 0)
-        layout.setColumnStretch(3, 1)
-        self._add_grid_row(layout, 0, 0, "По предмету:", self._field_row("subjects", self.subject_combo))
-        self._add_grid_row(layout, 0, 2, "Группа:", self._field_row("groups", self.group_combo))
-        self._add_grid_row(layout, 1, 0, "Специальность:", self._field_row("specialties", self.specialty_combo))
-        self._add_grid_row(layout, 1, 2, "Преподаватель:", self._field_row("teachers", self.teacher_combo))
-        self._add_grid_row(layout, 2, 0, "Инд. номер Moodle:", self._moodle_filter_row(), field_span=3)
-        self._add_ofo_grid_row(layout, 3, 0, "Семестр:", self.semester_edit)
-        self._add_ofo_grid_row(layout, 3, 2, "Учебный год:", self.academic_year_edit)
-        self._add_ofo_grid_row(layout, 4, 0, "Форма контроля:", self.control_form_edit)
-        self._add_ofo_grid_row(layout, 4, 2, "Дата проведения:", self.exam_date_edit)
-        self._add_ofo_grid_row(layout, 5, 0, "Зав. отделением:", self.department_head_edit, field_span=3)
-        layout.setRowMinimumHeight(6, 30)
-        layout.addWidget(self.include_percent_checkbox, 6, 1, 1, 3)
+        self.form_layout = QGridLayout(self)
+        self.form_layout.setContentsMargins(18, 22, 18, 16)
+        self.form_layout.setHorizontalSpacing(14)
+        self.form_layout.setVerticalSpacing(10)
+        self.form_layout.setColumnStretch(0, 0)
+        self.form_layout.setColumnStretch(1, 1)
+        self.form_layout.setColumnStretch(2, 0)
+        self.form_layout.setColumnStretch(3, 1)
+        self._add_grid_row(self.form_layout, 0, 0, "По предмету:", self._field_row("subjects", self.subject_combo))
+        self._add_grid_row(self.form_layout, 0, 2, "Группа:", self._field_row("groups", self.group_combo))
+        self._add_grid_row(self.form_layout, 1, 0, "Специальность:", self._field_row("specialties", self.specialty_combo))
+        self._add_grid_row(self.form_layout, 1, 2, "Преподаватель:", self._field_row("teachers", self.teacher_combo))
+        self._add_ofo_grid_row(self.form_layout, 2, 0, "Семестр:", self._field_row("semesters", self.semester_combo))
+        self._add_ofo_grid_row(self.form_layout, 2, 2, "Учебный год:", self._field_row("academic_years", self.academic_year_combo))
+        self._add_ofo_grid_row(self.form_layout, 3, 0, "Форма контроля:", self._field_row("control_forms", self.control_form_combo))
+        self._add_ofo_grid_row(self.form_layout, 3, 2, "Дата проведения:", self.exam_date_edit)
+        self._add_ofo_grid_row(self.form_layout, 4, 0, "Зав. отделением:", self._field_row("department_heads", self.department_head_combo), field_span=3)
+        self.moodle_filter_label = QLabel("Инд. номер Moodle:", self)
+        self.moodle_filter_label.setMinimumWidth(140)
+        self.moodle_filter_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.moodle_filter_container = self._moodle_filter_row()
+        self.form_layout.addWidget(self.moodle_filter_label, 5, 0)
+        self.form_layout.addWidget(self.moodle_filter_container, 5, 1, 1, 3)
+        self.form_layout.setRowMinimumHeight(6, 30)
+        self.form_layout.addWidget(self.include_percent_checkbox, 6, 1, 1, 3)
 
         self.group_combo.currentTextChanged.connect(lambda _text: self.moodle_filter_changed.emit())
         self.set_mode("ИФО")
@@ -158,10 +165,37 @@ class StatementForm(QGroupBox):
         edit.setAlignment(Qt.AlignVCenter)
         return edit
 
+    @staticmethod
+    def _date_edit() -> QDateEdit:
+        edit = QDateEdit()
+        edit.setCalendarPopup(True)
+        edit.setDisplayFormat("dd.MM.yyyy")
+        edit.setDate(QDate.currentDate())
+        edit.setMinimumDate(QDate(1900, 1, 1))
+        edit.setMaximumDate(QDate(2100, 12, 31))
+        edit.setFixedHeight(StatementForm.FIELD_HEIGHT)
+        edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        edit.setAlignment(Qt.AlignVCenter)
+        edit.setToolTip("Введите дату вручную или выберите в календаре")
+        return edit
+
     def set_mode(self, mode: str) -> None:
         is_ofo = mode == "ОФО"
         for widget in self.ofo_widgets:
             widget.setVisible(is_ofo)
+        self.form_layout.removeWidget(self.moodle_filter_label)
+        self.form_layout.removeWidget(self.moodle_filter_container)
+        moodle_row = 5 if is_ofo else 2
+        checkbox_row = 6 if is_ofo else 3
+        self.form_layout.addWidget(self.moodle_filter_label, moodle_row, 0)
+        self.form_layout.addWidget(self.moodle_filter_container, moodle_row, 1, 1, 3)
+        self.form_layout.removeWidget(self.include_percent_checkbox)
+        self.form_layout.addWidget(self.include_percent_checkbox, checkbox_row, 1, 1, 3)
+        for row in range(2, 7):
+            self.form_layout.setRowMinimumHeight(row, self.FIELD_ROW_HEIGHT if row <= checkbox_row else 0)
+        for row in (2, 3, 4):
+            self.form_layout.setRowMinimumHeight(row, self.FIELD_ROW_HEIGHT if is_ofo else 0)
+        self.form_layout.setRowMinimumHeight(moodle_row, self.FIELD_ROW_HEIGHT)
         height = 376 if is_ofo else 256
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
@@ -214,11 +248,19 @@ class StatementForm(QGroupBox):
         groups: list[str],
         specialties: list[str],
         teachers: list[str],
+        semesters: list[str] | None = None,
+        academic_years: list[str] | None = None,
+        control_forms: list[str] | None = None,
+        department_heads: list[str] | None = None,
     ) -> None:
         self._fill(self.subject_combo, subjects)
         self._fill(self.group_combo, groups)
         self._fill(self.specialty_combo, specialties)
         self._fill(self.teacher_combo, teachers)
+        self._fill(self.semester_combo, semesters or [])
+        self._fill(self.academic_year_combo, academic_years or [])
+        self._fill(self.control_form_combo, control_forms or [])
+        self._fill(self.department_head_combo, department_heads or [])
 
     @staticmethod
     def _fill(combo: QComboBox, values: list[str]) -> None:
@@ -239,6 +281,20 @@ class StatementForm(QGroupBox):
     def set_subject(self, subject: str) -> None:
         if subject:
             self.subject_combo.setEditText(subject)
+
+    def set_exam_date(self, date_text: str) -> None:
+        date_text = str(date_text or "").strip()
+        if not date_text:
+            self.exam_date_edit.setDate(QDate.currentDate())
+            return
+
+        for date_format in ("dd.MM.yyyy", "yyyy-MM-dd", "dd.MM.yy"):
+            date = QDate.fromString(date_text, date_format)
+            if date.isValid():
+                self.exam_date_edit.setDate(date)
+                return
+
+        self.exam_date_edit.lineEdit().setText(date_text)
 
     def set_moodle_filter_values(self, values: list[str], include_empty: bool = False) -> None:
         previous = self.selected_moodle_filters
@@ -319,10 +375,10 @@ class StatementForm(QGroupBox):
             "group": self.group_combo.currentText().strip(),
             "specialty": self.specialty_combo.currentText().strip(),
             "teacher": self.teacher_combo.currentText().strip(),
-            "semester": self.semester_edit.text().strip(),
-            "academic_year": self.academic_year_edit.text().strip(),
-            "control_form": self.control_form_edit.text().strip(),
+            "semester": self.semester_combo.currentText().strip(),
+            "academic_year": self.academic_year_combo.currentText().strip(),
+            "control_form": self.control_form_combo.currentText().strip(),
             "exam_date": self.exam_date_edit.text().strip(),
-            "department_head": self.department_head_edit.text().strip(),
+            "department_head": self.department_head_combo.currentText().strip(),
             "include_percent": self.include_percent_checkbox.isChecked(),
         }

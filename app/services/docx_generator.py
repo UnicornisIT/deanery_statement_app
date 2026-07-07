@@ -35,6 +35,12 @@ class StatementData:
     teacher: str
     students: list[StatementStudent]
     include_percent: bool = False
+    mode: str = "ИФО"
+    semester: str = ""
+    academic_year: str = ""
+    control_form: str = ""
+    exam_date: str = ""
+    department_head: str = ""
 
 
 class DocxGenerationError(Exception):
@@ -64,6 +70,7 @@ class DocxGenerator:
             raise DocxGenerationError(f"Не удалось сформировать Word-документ: {exc}") from exc
 
     def _replace_fields(self, document: Document, data: StatementData) -> None:
+        stats = self._grade_stats(data.students)
         replacements = {
             "По предмету: уточняется программой": f"По предмету: {data.subject}",
             "Группа: уточняется программой": f"Группа: {data.group}",
@@ -73,6 +80,17 @@ class DocxGenerator:
             "{{group}}": data.group,
             "{{specialty}}": data.specialty,
             "{{teacher}}": data.teacher,
+            "{{semester}}": data.semester,
+            "{{academic_year}}": data.academic_year,
+            "{{control_form}}": data.control_form,
+            "{{exam_date}}": data.exam_date,
+            "{{department_head}}": data.department_head,
+            "{{students_count}}": str(len(data.students)),
+            "{{grade_5_count}}": str(stats.get(5, 0)),
+            "{{grade_4_count}}": str(stats.get(4, 0)),
+            "{{grade_3_count}}": str(stats.get(3, 0)),
+            "{{grade_2_count}}": str(stats.get(2, 0)),
+            "{{absent_count}}": "0",
         }
 
         for paragraph in document.paragraphs:
@@ -114,7 +132,7 @@ class DocxGenerator:
         if header_index is None:
             raise DocxGenerationError("В таблице студентов не найдена строка заголовков")
 
-        data_row_start = header_index + 1
+        data_row_start = self._find_data_row_start(table, header_index)
         original_data_rows_count = max(0, len(table.rows) - data_row_start)
         required_rows = len(students)
         target_rows = max(required_rows, original_data_rows_count if self.keep_empty_rows else required_rows)
@@ -132,14 +150,30 @@ class DocxGenerator:
                 student = students[student_index]
                 self._write_cell(row.cells[0], str(student.number), align_center=True)
                 self._write_cell(row.cells[1], student.full_name)
-                self._write_cell(row.cells[2], self._format_grade(student, include_percent), align_center=True)
-                self._write_cell(row.cells[3], "")
+                if self._is_split_grade_table(row):
+                    self._write_cell(row.cells[2], str(student.grade.grade_number), align_center=True)
+                    self._write_cell(row.cells[3], student.grade.grade_full, align_center=True)
+                    self._write_cell(row.cells[4], "")
+                else:
+                    self._write_cell(row.cells[2], self._format_grade(student, include_percent), align_center=True)
+                    self._write_cell(row.cells[3], "")
 
     @staticmethod
     def _format_grade(student: StatementStudent, include_percent: bool) -> str:
         if include_percent:
             return student.grade.formatted_grade
         return f"{student.grade.grade_number} ({student.grade.grade_short})"
+
+    @staticmethod
+    def _grade_stats(students: list[StatementStudent]) -> dict[int, int]:
+        stats: dict[int, int] = {}
+        for student in students:
+            stats[student.grade.grade_number] = stats.get(student.grade.grade_number, 0) + 1
+        return stats
+
+    @staticmethod
+    def _is_split_grade_table(row) -> bool:
+        return len(row.cells) >= 5
 
     @staticmethod
     def _find_students_table(document: Document):
@@ -156,6 +190,17 @@ class DocxGenerator:
             if "фамилия" in row_text and "оценка" in row_text:
                 return idx
         return 0 if table.rows else None
+
+    @staticmethod
+    def _find_data_row_start(table, header_index: int) -> int:
+        next_index = header_index + 1
+        if next_index >= len(table.rows):
+            return next_index
+
+        next_row_text = " ".join(cell.text.lower() for cell in table.rows[next_index].cells)
+        if "цифрой" in next_row_text or "прописью" in next_row_text:
+            return next_index + 1
+        return next_index
 
     @staticmethod
     def _remove_row(table, row) -> None:

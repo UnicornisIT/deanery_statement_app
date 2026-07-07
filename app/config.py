@@ -74,7 +74,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         database=parser.get("database", "database", fallback="deanery_statement_app"),
     )
 
-    template_path = _resolve_path(base_dir, parser.get("app", "template_path", fallback="app/templates/statement_template.docx"))
+    template_path = _resolve_path(
+        base_dir,
+        parser.get("app", "template_path", fallback="app/templates/statement_template_ifo_diff.docx"),
+    )
     output_dir = _resolve_path(base_dir, parser.get("app", "output_dir", fallback="output"))
 
     app = AppSettings(

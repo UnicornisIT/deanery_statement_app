@@ -99,7 +99,7 @@ class MainWindow(QMainWindow):
         self.parsed_students: list[StudentResult] = []
         self.statement_students: list[StatementStudent] = []
         self.available_individual_numbers: list[str] = []
-        self.current_template_path: Path = config.app.template_path
+        self.current_template_path: Path = self._default_template_path()
         self.ui_state_path = config.base_dir / "app_state.json"
         self.excel_load_thread: QThread | None = None
         self.excel_load_worker: ExcelLoadWorker | None = None
@@ -117,6 +117,11 @@ class MainWindow(QMainWindow):
         self.history_button = QPushButton("История")
         self.template_button = QPushButton("Шаблон")
         self.grade_rules_button = QPushButton("Оценки")
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["ИФО", "ОФО"])
+        self.mode_combo.setCurrentText(self.mode)
+        self.mode_combo.setFixedWidth(92)
+        self.mode_combo.setFixedHeight(34)
 
         for button, width in (
             (self.generate_button, 220),
@@ -135,6 +140,7 @@ class MainWindow(QMainWindow):
 
         self.form = StatementForm()
         self.form.setTitle(f"Данные ведомости ({self.mode})")
+        self.form.set_mode(self.mode)
         self.preview_search_edit = QLineEdit()
         self.preview_search_edit.setPlaceholderText("Поиск в предпросмотре")
         self.preview_grade_filter = QComboBox()
@@ -204,6 +210,10 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(self._menu_action("Оценки", self.open_grade_rules))
 
         self.view_menu = menu_bar.addMenu("Вид")
+        self.mode_menu = self.view_menu.addMenu("Режим")
+        self.mode_menu.addAction(self._menu_action("ИФО", lambda: self.set_mode("ИФО")))
+        self.mode_menu.addAction(self._menu_action("ОФО", lambda: self.set_mode("ОФО")))
+        self.view_menu.addSeparator()
         self.view_menu.addAction(self._menu_action("История", self.open_history))
         self.view_menu.addAction(self._menu_action("Папка результата", self.open_output_folder))
 
@@ -274,9 +284,13 @@ class MainWindow(QMainWindow):
         file_row.addWidget(self.path_edit, stretch=1)
         root.addLayout(file_row)
 
-        self.mode_label = QLabel(f"Режим: {self.mode}")
+        mode_row = QHBoxLayout()
+        mode_row.addStretch(1)
+        self.mode_label = QLabel("Режим:")
         self.mode_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        root.addWidget(self.mode_label)
+        mode_row.addWidget(self.mode_label)
+        mode_row.addWidget(self.mode_combo)
+        root.addLayout(mode_row)
         root.addWidget(self.form)
 
         preview_tools = QHBoxLayout()
@@ -322,6 +336,7 @@ class MainWindow(QMainWindow):
         self.template_button.clicked.connect(self.choose_template)
         self.grade_rules_button.clicked.connect(self.open_grade_rules)
         self.reload_dict_button.clicked.connect(self.open_directory_manager)
+        self.mode_combo.currentTextChanged.connect(self.set_mode)
         self.form.add_value_requested.connect(self.add_current_directory_value)
         self.form.moodle_filter_changed.connect(self.apply_student_filter)
         self.form.test_started_changed.connect(self.apply_student_filter)
@@ -343,6 +358,10 @@ class MainWindow(QMainWindow):
                 groups=self.directory_repo.list_values("groups"),
                 specialties=self.directory_repo.list_values("specialties"),
                 teachers=self.directory_repo.list_values("teachers"),
+                semesters=self.directory_repo.list_values("semesters"),
+                academic_years=self.directory_repo.list_values("academic_years"),
+                control_forms=self.directory_repo.list_values("control_forms"),
+                department_heads=self.directory_repo.list_values("department_heads"),
             )
             self.grade_service.reload_rules()
             self._info("Справочники и правила оценивания загружены из PostgreSQL")
@@ -370,24 +389,65 @@ class MainWindow(QMainWindow):
         self.form.include_percent_checkbox.setChecked(bool(data.get("include_percent", False)))
 
         template_value = str(data.get("template_path", "")).strip()
+        if self.mode == "ОФО":
+            template_value = str(data.get("template_path_ofo", "")).strip()
+        elif self.mode == "ИФО":
+            template_value = str(data.get("template_path_ifo", template_value)).strip()
+            if "statement_template_ofo" in template_value.lower():
+                template_value = ""
         template_path = Path(template_value) if template_value else None
         if template_path and template_path.exists():
             self.current_template_path = template_path
 
+        self._set_combo_text(self.form.semester_combo, str(data.get("semester", "")))
+        self._set_combo_text(self.form.academic_year_combo, str(data.get("academic_year", "")))
+        self._set_combo_text(self.form.control_form_combo, str(data.get("control_form", "диф.зачет") or "диф.зачет"))
+        self.form.set_exam_date(str(data.get("exam_date", "")))
+        self._set_combo_text(self.form.department_head_combo, str(data.get("department_head", "")))
+
     def _save_ui_state(self) -> None:
         try:
             form_data = self.form.get_data()
+            existing_data = {}
+            if self.ui_state_path.exists():
+                try:
+                    existing_data = json.loads(self.ui_state_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing_data = {}
             data = {
+                **existing_data,
                 "subject": form_data.get("subject", ""),
                 "group": form_data.get("group", ""),
                 "specialty": form_data.get("specialty", ""),
                 "teacher": form_data.get("teacher", ""),
+                "semester": form_data.get("semester", ""),
+                "academic_year": form_data.get("academic_year", ""),
+                "control_form": form_data.get("control_form", ""),
+                "exam_date": form_data.get("exam_date", ""),
+                "department_head": form_data.get("department_head", ""),
                 "include_percent": bool(form_data.get("include_percent", False)),
-                "template_path": str(self.current_template_path),
+                self._template_state_key(): str(self.current_template_path),
             }
+            if self.mode == "ИФО" or "template_path" not in data:
+                data["template_path"] = str(self.current_template_path)
             self.ui_state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             logger.exception("Не удалось сохранить состояние интерфейса")
+
+    def _default_template_path(self) -> Path:
+        templates_dir = self.config.base_dir / "app" / "templates"
+        if self.mode == "ОФО":
+            return templates_dir / "statement_template_ofo.docx"
+        if self.config.app.template_path.exists():
+            return self.config.app.template_path
+        fallback = templates_dir / "statement_template_ifo_diff.docx"
+        if fallback.exists():
+            return fallback
+        fallback = templates_dir / "statement_template_diff.docx"
+        return fallback if fallback.exists() else self.config.app.template_path
+
+    def _template_state_key(self) -> str:
+        return "template_path_ofo" if self.mode == "ОФО" else "template_path_ifo"
 
     @staticmethod
     def _set_combo_text(combo: QComboBox, value: str) -> None:
@@ -401,6 +461,10 @@ class MainWindow(QMainWindow):
             "groups": "группа",
             "specialties": "специальность",
             "teachers": "преподаватель",
+            "semesters": "семестр",
+            "academic_years": "учебный год",
+            "control_forms": "форма контроля",
+            "department_heads": "зав. отделением",
         }
         if not value:
             self._error("Введите значение перед добавлением в справочник")
@@ -527,6 +591,7 @@ class MainWindow(QMainWindow):
         self.choose_button.setEnabled(not loading)
         self.generate_button.setEnabled(not loading)
         self.package_button.setEnabled(not loading)
+        self.mode_combo.setEnabled(not loading)
         if loading:
             self.loading_overlay.start(message)
         else:
@@ -542,12 +607,22 @@ class MainWindow(QMainWindow):
             return
 
         form_data = self.form.get_data()
-        missing = [label for key, label in {
+        required_fields = {
             "subject": "предмет",
             "group": "группа",
             "specialty": "специальность",
             "teacher": "преподаватель",
-        }.items() if not form_data[key]]
+        }
+        if self.mode == "ОФО":
+            required_fields.update(
+                {
+                    "semester": "семестр",
+                    "academic_year": "учебный год",
+                    "control_form": "форма контроля",
+                    "exam_date": "дата проведения",
+                }
+            )
+        missing = [label for key, label in required_fields.items() if not form_data[key]]
         if missing:
             self._error("Заполните поля: " + ", ".join(missing))
             return
@@ -573,6 +648,12 @@ class MainWindow(QMainWindow):
                 teacher=form_data["teacher"],
                 students=self.statement_students,
                 include_percent=bool(form_data["include_percent"]),
+                mode=self.mode,
+                semester=str(form_data.get("semester", "")),
+                academic_year=str(form_data.get("academic_year", "")),
+                control_form=str(form_data.get("control_form", "")),
+                exam_date=str(form_data.get("exam_date", "")),
+                department_head=str(form_data.get("department_head", "")),
             )
             generator = DocxGenerator(self.current_template_path, self.config.app.keep_empty_rows)
             self.current_docx_path = generator.generate(data, output_path)
@@ -590,6 +671,35 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             logger.exception("Ошибка формирования ведомости")
             self._error(f"Не удалось сформировать ведомость: {exc}")
+
+    def set_mode(self, mode: str) -> None:
+        mode = str(mode or "").strip()
+        if mode not in {"ИФО", "ОФО"} or mode == self.mode:
+            return
+
+        if self.excel_load_thread and self.excel_load_thread.isRunning():
+            self._error("Дождитесь окончания загрузки Excel-файла перед сменой режима")
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentText(self.mode)
+            self.mode_combo.blockSignals(False)
+            return
+
+        self._save_ui_state()
+        self.mode = mode
+        self.current_template_path = self._default_template_path()
+        self._load_ui_state()
+
+        self.setWindowTitle(f"Формирование ведомостей из Moodle — {self.mode}")
+        self.form.setTitle(f"Данные ведомости ({self.mode})")
+        self.form.set_mode(self.mode)
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentText(self.mode)
+        self.mode_combo.blockSignals(False)
+
+        self.current_docx_path = None
+        self._set_document_actions_enabled(False)
+        self.apply_student_filter()
+        self._info(f"Режим изменен: {self.mode}. Шаблон: {self.current_template_path}")
 
     def apply_student_filter(self) -> None:
         selected_filters = {value.lower() for value in self._selected_individual_numbers()}
@@ -914,6 +1024,11 @@ class MainWindow(QMainWindow):
         self.directory_repo.add_value("groups", form_data["group"])
         self.directory_repo.add_value("specialties", form_data["specialty"])
         self.directory_repo.add_value("teachers", form_data["teacher"])
+        if self.mode == "ОФО":
+            self.directory_repo.add_value("semesters", str(form_data.get("semester", "")))
+            self.directory_repo.add_value("academic_years", str(form_data.get("academic_year", "")))
+            self.directory_repo.add_value("control_forms", str(form_data.get("control_form", "")))
+            self.directory_repo.add_value("department_heads", str(form_data.get("department_head", "")))
 
     def _build_default_output_name(self, form_data: dict[str, str]) -> Path:
         safe_subject = self._safe_filename(form_data.get("subject") or "предмет")

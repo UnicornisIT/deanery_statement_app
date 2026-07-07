@@ -48,3 +48,25 @@ INSERT INTO teachers (full_name) VALUES
 ('Иванова Мария Петровна'),
 ('Петров Сергей Иванович')
 ON CONFLICT (full_name) DO NOTHING;
+
+INSERT INTO semesters (name) VALUES
+('1'),
+('2'),
+('3'),
+('4'),
+('5'),
+('6'),
+('7'),
+('8')
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO academic_years (name) VALUES
+('2025/2026'),
+('2026/2027')
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO control_forms (name) VALUES
+('диф.зачет'),
+('экзамен'),
+('зачет')
+ON CONFLICT (name) DO NOTHING;
