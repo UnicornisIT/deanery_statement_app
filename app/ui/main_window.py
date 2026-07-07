@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThread, Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -15,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -23,12 +28,15 @@ from app.config import AppConfig
 from app.db.connection import DatabaseConnection
 from app.db.repositories import DirectoryRepository, GeneratedStatementRepository, GradeRuleRepository
 from app.services.docx_generator import DocxGenerator, StatementData, StatementStudent
-from app.services.excel_parser import ExcelParseError, ExcelParser, StudentResult
+from app.services.excel_parser import StudentResult
 from app.services.grade_service import GradeService
 from app.services.pdf_exporter import PdfExporter
 from app.services.print_service import PrintService
-from app.services.subject_detector import SubjectDetector
 from app.ui.directory_dialog import DirectoryManagerDialog
+from app.ui.excel_load_worker import ExcelLoadWorker
+from app.ui.grade_rules_dialog import GradeRulesDialog
+from app.ui.history_dialog import HistoryDialog
+from app.ui.loading_overlay import LoadingOverlay
 from app.ui.preview_table import PreviewTable
 from app.ui.statement_form import StatementForm
 
@@ -44,9 +52,9 @@ class MainWindow(QMainWindow):
 
         self.db = DatabaseConnection(config.database)
         self.directory_repo = DirectoryRepository(self.db)
-        self.grade_service = GradeService(GradeRuleRepository(self.db))
+        self.grade_rule_repo = GradeRuleRepository(self.db)
+        self.grade_service = GradeService(self.grade_rule_repo)
         self.history_repo = GeneratedStatementRepository(self.db)
-        self.excel_parser = ExcelParser(config.excel)
         self.pdf_exporter = PdfExporter()
         self.print_service = PrintService()
 
@@ -55,6 +63,10 @@ class MainWindow(QMainWindow):
         self.parsed_students: list[StudentResult] = []
         self.statement_students: list[StatementStudent] = []
         self.available_individual_numbers: list[str] = []
+        self.current_template_path: Path = config.app.template_path
+        self.ui_state_path = config.base_dir / "app_state.json"
+        self.excel_load_thread: QThread | None = None
+        self.excel_load_worker: ExcelLoadWorker | None = None
 
         self.path_edit = QLineEdit()
         self.path_edit.setReadOnly(True)
@@ -64,12 +76,42 @@ class MainWindow(QMainWindow):
         self.export_pdf_button = QPushButton("Экспорт в PDF")
         self.print_button = QPushButton("Печать")
         self.reload_dict_button = QPushButton("Справочники")
+        self.package_button = QPushButton("DOCX + PDF")
+        self.open_folder_button = QPushButton("Папка")
+        self.history_button = QPushButton("История")
+        self.template_button = QPushButton("Шаблон")
+        self.grade_rules_button = QPushButton("Оценки")
+
+        for button, width in (
+            (self.generate_button, 220),
+            (self.open_button, 170),
+            (self.export_pdf_button, 140),
+            (self.print_button, 90),
+            (self.package_button, 120),
+            (self.open_folder_button, 90),
+            (self.history_button, 100),
+            (self.template_button, 100),
+            (self.grade_rules_button, 100),
+            (self.reload_dict_button, 140),
+        ):
+            button.setMinimumWidth(width)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.form = StatementForm()
+        self.preview_search_edit = QLineEdit()
+        self.preview_search_edit.setPlaceholderText("Поиск в предпросмотре")
+        self.preview_grade_filter = QComboBox()
+        self.preview_grade_filter.addItems(["Все оценки", "5", "4", "3", "2"])
         self.preview_table = PreviewTable()
+        self.preview_table.setMinimumHeight(120)
+        self.preview_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.validation_box = QPlainTextEdit()
+        self.validation_box.setReadOnly(True)
+        self.validation_box.setMaximumHeight(46)
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
-        self.log_box.setMaximumHeight(120)
+        self.log_box.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.log_box.setMaximumHeight(56)
         self.footer_label = QLabel()
         self.footer_label.setObjectName("footerLabel")
         self.footer_label.setTextFormat(Qt.RichText)
@@ -90,58 +132,165 @@ class MainWindow(QMainWindow):
             "href=\"https://t.me/unicornis_pulse\">t.me/unicornis_pulse</a>"
         )
 
+        self._build_menu()
         self._build_layout()
         self._connect_signals()
         self._set_document_actions_enabled(False)
         self._load_dictionaries()
+        self._load_ui_state()
+
+    def closeEvent(self, event) -> None:
+        if self.excel_load_thread and self.excel_load_thread.isRunning():
+            QMessageBox.information(self, "Загрузка", "Дождитесь окончания загрузки Excel-файла.")
+            event.ignore()
+            return
+        self._save_ui_state()
+        super().closeEvent(event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "loading_overlay") and self.loading_overlay.parentWidget():
+            self.loading_overlay.setGeometry(self.loading_overlay.parentWidget().rect())
+
+    def _build_menu(self) -> None:
+        menu_bar = self.menuBar()
+
+        self.file_menu = menu_bar.addMenu("Файл")
+        self.file_menu.addAction(self._menu_action("Выбрать Excel-файл", self.choose_excel_file))
+        self.file_menu.addAction(self._menu_action("Выбрать шаблон", self.choose_template))
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self._menu_action("Сформировать ведомость", self.generate_statement))
+        self.file_menu.addAction(self._menu_action("Сформировать DOCX + PDF", self.generate_statement_package))
+
+        self.edit_menu = menu_bar.addMenu("Правка")
+        self.edit_menu.addAction(self._menu_action("Справочники", self.open_directory_manager))
+        self.edit_menu.addAction(self._menu_action("Оценки", self.open_grade_rules))
+
+        self.view_menu = menu_bar.addMenu("Вид")
+        self.view_menu.addAction(self._menu_action("История", self.open_history))
+        self.view_menu.addAction(self._menu_action("Папка результата", self.open_output_folder))
+
+        self.help_menu = menu_bar.addMenu("Справка")
+        self.help_menu.addAction(self._menu_action("Проверка данных", self.show_validation_report))
+        self.help_menu.addAction(self._menu_action("Сообщения", self.show_messages))
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self._menu_action("О программе", self._show_about))
+
+    def _menu_action(self, title: str, handler) -> QAction:
+        action = QAction(title, self)
+        action.triggered.connect(lambda _checked=False: handler())
+        return action
+
+    def _show_about(self) -> None:
+        message = QMessageBox(self)
+        message.setWindowTitle("О программе")
+        message.setTextFormat(Qt.RichText)
+        message.setText(
+            "Формирование ведомостей из Moodle<br><br>"
+            "Разработчик: <a href=\"https://github.com/UnicornisIT\">UnicornisIT</a><br>"
+            "Почта: <a href=\"mailto:earov18@outlook.com\">earov18@outlook.com</a><br>"
+            "Telegram: <a href=\"https://t.me/unicornis_pulse\">t.me/unicornis_pulse</a><br>"
+            "GitHub: <a href=\"https://github.com/UnicornisIT\">github.com/UnicornisIT</a>"
+        )
+        message.exec()
+
+    def show_validation_report(self) -> None:
+        text = self.validation_box.toPlainText().strip() or "Проверка данных пока не выполнялась."
+        self._show_text_dialog("Проверка данных", text)
+
+    def show_messages(self) -> None:
+        text = self.log_box.toPlainText().strip() or "Сообщений пока нет."
+        self._show_text_dialog("Сообщения", text)
+
+    def _show_text_dialog(self, title: str, text: str) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(760, 420)
+
+        text_box = QPlainTextEdit(dialog)
+        text_box.setReadOnly(True)
+        text_box.setPlainText(text)
+
+        close_button = QPushButton("Закрыть", dialog)
+        close_button.clicked.connect(dialog.accept)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        layout.addWidget(text_box, stretch=1)
+        layout.addWidget(close_button, alignment=Qt.AlignRight)
+        dialog.exec()
 
     def _build_layout(self) -> None:
         central = QWidget(self)
         root = QVBoxLayout(central)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(8)
 
         file_row = QHBoxLayout()
         file_row.setSpacing(8)
+        self.choose_button.setMinimumWidth(185)
+        self.choose_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.path_edit.setMinimumWidth(220)
         file_row.addWidget(self.choose_button)
         file_row.addWidget(QLabel("Файл:"))
         file_row.addWidget(self.path_edit, stretch=1)
         root.addLayout(file_row)
 
         root.addWidget(self.form)
-        root.addWidget(QLabel("Предварительный просмотр:"))
+
+        preview_tools = QHBoxLayout()
+        preview_tools.setSpacing(8)
+        preview_tools.addWidget(QLabel("Предварительный просмотр:"))
+        preview_tools.addStretch(1)
+        preview_tools.addWidget(self.preview_search_edit)
+        preview_tools.addWidget(self.preview_grade_filter)
+        root.addLayout(preview_tools)
         root.addWidget(self.preview_table, stretch=1)
 
-        actions = QHBoxLayout()
+        actions_bar = QWidget(central)
+        actions_bar.setObjectName("actionsBar")
+        actions_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        actions = QHBoxLayout(actions_bar)
+        actions.setContentsMargins(0, 4, 0, 4)
         actions.setSpacing(8)
         actions.addWidget(self.generate_button)
         actions.addWidget(self.open_button)
         actions.addWidget(self.export_pdf_button)
+        actions.addWidget(self.package_button)
         actions.addWidget(self.print_button)
+        actions.addWidget(self.open_folder_button)
         actions.addStretch(1)
-        actions.addWidget(self.reload_dict_button)
-        root.addLayout(actions)
+        root.addWidget(actions_bar)
 
-        root.addWidget(QLabel("Сообщения:"))
-        root.addWidget(self.log_box)
         root.addWidget(self.footer_label)
 
         self.setCentralWidget(central)
+        self.loading_overlay = LoadingOverlay(central)
 
     def _connect_signals(self) -> None:
         self.choose_button.clicked.connect(self.choose_excel_file)
         self.generate_button.clicked.connect(self.generate_statement)
         self.open_button.clicked.connect(self.open_document)
         self.export_pdf_button.clicked.connect(self.export_pdf)
+        self.package_button.clicked.connect(self.generate_statement_package)
         self.print_button.clicked.connect(self.print_document)
+        self.open_folder_button.clicked.connect(self.open_output_folder)
+        self.history_button.clicked.connect(self.open_history)
+        self.template_button.clicked.connect(self.choose_template)
+        self.grade_rules_button.clicked.connect(self.open_grade_rules)
         self.reload_dict_button.clicked.connect(self.open_directory_manager)
         self.form.add_value_requested.connect(self.add_current_directory_value)
         self.form.moodle_filter_changed.connect(self.apply_student_filter)
+        self.preview_search_edit.textChanged.connect(self.apply_preview_filter)
+        self.preview_grade_filter.currentTextChanged.connect(self.apply_preview_filter)
 
     def _set_document_actions_enabled(self, enabled: bool) -> None:
         self.open_button.setEnabled(enabled)
         self.export_pdf_button.setEnabled(enabled)
         self.print_button.setEnabled(enabled)
+        self.open_folder_button.setEnabled(enabled)
 
     def _load_dictionaries(self) -> None:
         try:
@@ -160,6 +309,47 @@ class MainWindow(QMainWindow):
                 "Проверьте config.ini, доступность PostgreSQL и SQL-скрипты. "
                 f"Техническая причина: {exc}"
             )
+
+    def _load_ui_state(self) -> None:
+        if not self.ui_state_path.exists():
+            return
+        try:
+            data = json.loads(self.ui_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("Не удалось загрузить состояние интерфейса")
+            return
+
+        self._set_combo_text(self.form.subject_combo, data.get("subject", ""))
+        self._set_combo_text(self.form.group_combo, data.get("group", ""))
+        self._set_combo_text(self.form.specialty_combo, data.get("specialty", ""))
+        self._set_combo_text(self.form.teacher_combo, data.get("teacher", ""))
+        self.form.include_percent_checkbox.setChecked(bool(data.get("include_percent", False)))
+
+        template_value = str(data.get("template_path", "")).strip()
+        template_path = Path(template_value) if template_value else None
+        if template_path and template_path.exists():
+            self.current_template_path = template_path
+
+    def _save_ui_state(self) -> None:
+        try:
+            form_data = self.form.get_data()
+            data = {
+                "subject": form_data.get("subject", ""),
+                "group": form_data.get("group", ""),
+                "specialty": form_data.get("specialty", ""),
+                "teacher": form_data.get("teacher", ""),
+                "include_percent": bool(form_data.get("include_percent", False)),
+                "template_path": str(self.current_template_path),
+            }
+            self.ui_state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            logger.exception("Не удалось сохранить состояние интерфейса")
+
+    @staticmethod
+    def _set_combo_text(combo: QComboBox, value: str) -> None:
+        value = str(value or "").strip()
+        if value:
+            combo.setEditText(value)
 
     def add_current_directory_value(self, directory: str, value: str) -> None:
         labels = {
@@ -185,6 +375,35 @@ class MainWindow(QMainWindow):
         dialog.data_changed.connect(self._load_dictionaries)
         dialog.exec()
 
+    def open_history(self) -> None:
+        HistoryDialog(self.history_repo, self.print_service, self).exec()
+
+    def open_grade_rules(self) -> None:
+        dialog = GradeRulesDialog(self.grade_rule_repo, self)
+        dialog.rules_changed.connect(self._reload_grade_rules_after_edit)
+        dialog.exec()
+
+    def _reload_grade_rules_after_edit(self) -> None:
+        try:
+            self.grade_service.reload_rules()
+            self.apply_student_filter()
+            self._info("Правила оценивания обновлены")
+        except Exception as exc:
+            self._error(f"Не удалось обновить правила оценивания: {exc}")
+
+    def choose_template(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите шаблон Word",
+            str(self.current_template_path.parent),
+            "Word document (*.docx)",
+        )
+        if not file_path:
+            return
+        self.current_template_path = Path(file_path)
+        self._save_ui_state()
+        self._info(f"Выбран шаблон: {self.current_template_path}")
+
     def choose_excel_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -198,36 +417,77 @@ class MainWindow(QMainWindow):
         self.current_excel_path = Path(file_path)
         self.path_edit.setText(str(self.current_excel_path))
         logger.info("Выбран Excel-файл: %s", self.current_excel_path)
+        self._start_excel_loading(self.current_excel_path)
 
-        try:
-            result = self.excel_parser.parse(self.current_excel_path)
-            self.parsed_students = result.students
-            self.available_individual_numbers = result.individual_numbers or []
-            has_empty_individual_numbers = any(not student.individual_number for student in self.parsed_students)
-            self.form.set_moodle_filter_values(
-                self.available_individual_numbers,
-                include_empty=has_empty_individual_numbers,
-            )
-            self.apply_student_filter()
+    def _start_excel_loading(self, file_path: Path) -> None:
+        if self.excel_load_thread and self.excel_load_thread.isRunning():
+            return
 
-            subject = SubjectDetector.detect(self.current_excel_path)
+        self._set_loading_state(True, "Идет обработка файла")
+
+        self.excel_load_thread = QThread(self)
+        self.excel_load_worker = ExcelLoadWorker(file_path, self.config.excel)
+        self.excel_load_worker.moveToThread(self.excel_load_thread)
+
+        self.excel_load_thread.started.connect(self.excel_load_worker.run)
+        self.excel_load_worker.finished.connect(self._handle_excel_loaded)
+        self.excel_load_worker.failed.connect(self._handle_excel_load_failed)
+        self.excel_load_worker.finished.connect(self.excel_load_thread.quit)
+        self.excel_load_worker.failed.connect(self.excel_load_thread.quit)
+        self.excel_load_worker.finished.connect(self.excel_load_worker.deleteLater)
+        self.excel_load_worker.failed.connect(self.excel_load_worker.deleteLater)
+        self.excel_load_thread.finished.connect(self.excel_load_thread.deleteLater)
+        self.excel_load_thread.finished.connect(self._finish_excel_loading)
+        self.excel_load_thread.start()
+
+    def _handle_excel_loaded(self, file_path: object, result: object, subject: str) -> None:
+        self.current_excel_path = Path(file_path)
+        self.parsed_students = result.students
+        self.available_individual_numbers = result.individual_numbers or []
+        has_empty_individual_numbers = any(not student.individual_number for student in self.parsed_students)
+        self.form.set_moodle_filter_values(
+            self.available_individual_numbers,
+            include_empty=has_empty_individual_numbers,
+        )
+        self.apply_student_filter()
+
+        if subject:
             self.form.set_subject(subject)
 
-            filters_message = ""
-            if self.available_individual_numbers or has_empty_individual_numbers:
-                empty_message = " Есть строки без инд. номера." if has_empty_individual_numbers else ""
-                filters_message = f" Найдено инд. номеров Moodle: {len(self.available_individual_numbers)}.{empty_message}"
-            self._info(
-                f"Файл загружен. Строка заголовков: {result.header_row}. "
-                f"Строка начала данных: {result.data_start_row}. "
-                f"Найдено студентов: {len(self.parsed_students)}.{filters_message}"
-            )
-        except ExcelParseError as exc:
-            logger.exception("Ошибка чтения Excel")
-            self._error(str(exc))
-        except Exception as exc:
-            logger.exception("Ошибка обработки Excel")
-            self._error(f"Не удалось обработать Excel-файл: {exc}")
+        filters_message = ""
+        if self.available_individual_numbers or has_empty_individual_numbers:
+            empty_message = " Есть строки без инд. номера." if has_empty_individual_numbers else ""
+            filters_message = f" Найдено инд. номеров Moodle: {len(self.available_individual_numbers)}.{empty_message}"
+        self._info(
+            f"Файл загружен. Строка заголовков: {result.header_row}. "
+            f"Строка начала данных: {result.data_start_row}. "
+            f"Найдено студентов: {len(self.parsed_students)}.{filters_message}"
+        )
+
+    def _handle_excel_load_failed(self, error_type: str, message: str) -> None:
+        if error_type == "parse":
+            logger.error("Ошибка чтения Excel: %s", message)
+            self._error(message)
+            return
+
+        logger.error("Ошибка обработки Excel: %s", message)
+        self._error(f"Не удалось обработать Excel-файл: {message}")
+
+    def _finish_excel_loading(self) -> None:
+        self.excel_load_thread = None
+        self.excel_load_worker = None
+        self._set_loading_state(False)
+
+    def _set_loading_state(self, loading: bool, message: str = "") -> None:
+        self.menuBar().setEnabled(not loading)
+        self.choose_button.setEnabled(not loading)
+        self.generate_button.setEnabled(not loading)
+        self.package_button.setEnabled(not loading)
+        if loading:
+            self.loading_overlay.start(message)
+        else:
+            self.loading_overlay.stop()
+            self._set_document_actions_enabled(bool(self.current_docx_path))
 
     def generate_statement(self) -> None:
         if not self.current_excel_path:
@@ -270,7 +530,7 @@ class MainWindow(QMainWindow):
                 students=self.statement_students,
                 include_percent=bool(form_data["include_percent"]),
             )
-            generator = DocxGenerator(self.config.app.template_path, self.config.app.keep_empty_rows)
+            generator = DocxGenerator(self.current_template_path, self.config.app.keep_empty_rows)
             self.current_docx_path = generator.generate(data, output_path)
             self.history_repo.save(
                 subject_name=form_data["subject"],
@@ -281,6 +541,7 @@ class MainWindow(QMainWindow):
                 output_docx_file=str(self.current_docx_path),
             )
             self._set_document_actions_enabled(True)
+            self._save_ui_state()
             self._info(f"Ведомость сформирована: {self.current_docx_path}")
         except Exception as exc:
             logger.exception("Ошибка формирования ведомости")
@@ -299,6 +560,54 @@ class MainWindow(QMainWindow):
 
         self.statement_students, preview_students = self._build_attempt_views(source_students)
         self.preview_table.set_students(preview_students)
+        self._update_validation(source_students, preview_students)
+        self.apply_preview_filter()
+
+    def apply_preview_filter(self, *_args) -> None:
+        query = self.preview_search_edit.text().strip().casefold()
+        grade_filter = self.preview_grade_filter.currentText().strip()
+        for row in range(self.preview_table.rowCount()):
+            row_text = " ".join(
+                self.preview_table.item(row, col).text()
+                for col in range(self.preview_table.columnCount())
+                if self.preview_table.item(row, col)
+            ).casefold()
+            grade_text = self.preview_table.item(row, 5).text() if self.preview_table.item(row, 5) else ""
+            matches_query = not query or query in row_text
+            matches_grade = grade_filter == "Все оценки" or grade_text.startswith(grade_filter)
+            self.preview_table.setRowHidden(row, not (matches_query and matches_grade))
+
+    def _update_validation(
+        self,
+        source_students: list[StudentResult],
+        preview_students: list[StatementStudent],
+    ) -> None:
+        warnings: list[str] = []
+        if not source_students:
+            warnings.append("Нет студентов для выбранного фильтра.")
+
+        empty_names = sum(1 for student in source_students if not student.full_name.strip())
+        empty_numbers = sum(1 for student in source_students if not student.individual_number.strip())
+        low_scores = sum(1 for student in source_students if student.percent < 50)
+
+        identities: dict[str, int] = {}
+        for student in source_students:
+            identities[self._student_identity_key(student)] = identities.get(self._student_identity_key(student), 0) + 1
+        repeated_attempts = sum(1 for count in identities.values() if count > 1)
+
+        if empty_names:
+            warnings.append(f"Пустые ФИО: {empty_names}.")
+        if empty_numbers:
+            warnings.append(f"Без инд. номера Moodle: {empty_numbers}.")
+        if repeated_attempts:
+            warnings.append(f"Студенты с несколькими попытками: {repeated_attempts}. В ведомость берется лучшая попытка.")
+        if low_scores:
+            warnings.append(f"Результаты ниже 50%: {low_scores}.")
+
+        if warnings:
+            self.validation_box.setPlainText("\n".join(warnings))
+        else:
+            self.validation_box.setPlainText(f"Ошибок не найдено. В предпросмотре строк: {len(preview_students)}.")
 
     def _selected_individual_numbers(self) -> list[str]:
         selected = self.form.get_moodle_filters()
@@ -477,6 +786,22 @@ class MainWindow(QMainWindow):
             self._info(f"PDF создан: {result}")
         except Exception as exc:
             logger.exception("Ошибка экспорта PDF")
+            self._error(str(exc))
+
+    def generate_statement_package(self) -> None:
+        previous_docx_path = self.current_docx_path
+        self.generate_statement()
+        if not self.current_docx_path or self.current_docx_path == previous_docx_path:
+            return
+        self.export_pdf()
+
+    def open_output_folder(self) -> None:
+        if not self.current_docx_path:
+            self._error("Сначала сформируйте ведомость")
+            return
+        try:
+            self.print_service.open_folder(self.current_docx_path.parent)
+        except Exception as exc:
             self._error(str(exc))
 
     def print_document(self) -> None:

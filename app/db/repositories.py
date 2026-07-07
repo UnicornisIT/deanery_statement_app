@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from app.db.connection import DatabaseConnection
-from app.db.models import GradeRule
+from app.db.models import GeneratedStatement, GradeRule
 
 
 class DirectoryRepository:
@@ -97,6 +97,25 @@ class GradeRuleRepository:
                 )
             return rules
 
+    def replace_rules(self, rules: list[GradeRule]) -> None:
+        with self.db.cursor() as cursor:
+            cursor.execute("DELETE FROM grade_rules")
+            for rule in rules:
+                cursor.execute(
+                    """
+                    INSERT INTO grade_rules
+                    (min_percent, max_percent, grade_number, grade_short, grade_full)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        rule.min_percent,
+                        rule.max_percent,
+                        rule.grade_number,
+                        rule.grade_short,
+                        rule.grade_full,
+                    ),
+                )
+
 
 class GeneratedStatementRepository:
     def __init__(self, db: DatabaseConnection):
@@ -127,3 +146,29 @@ class GeneratedStatementRepository:
                     output_docx_file,
                 ),
             )
+
+    def list_recent(self, limit: int = 100) -> list[GeneratedStatement]:
+        with self.db.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                """
+                SELECT id, subject_name, group_name, specialty_name, teacher_name,
+                       source_excel_file, output_docx_file, created_at
+                FROM generated_statements
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return [
+                GeneratedStatement(
+                    id=int(row["id"]),
+                    subject_name=str(row.get("subject_name") or ""),
+                    group_name=str(row.get("group_name") or ""),
+                    specialty_name=str(row.get("specialty_name") or ""),
+                    teacher_name=str(row.get("teacher_name") or ""),
+                    source_excel_file=str(row.get("source_excel_file") or ""),
+                    output_docx_file=str(row.get("output_docx_file") or ""),
+                    created_at=row.get("created_at"),
+                )
+                for row in cursor.fetchall()
+            ]

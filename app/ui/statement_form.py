@@ -8,12 +8,14 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QCompleter,
-    QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QToolButton,
     QWidget,
 )
@@ -22,12 +24,18 @@ from PySide6.QtWidgets import (
 class StatementForm(QGroupBox):
     add_value_requested = Signal(str, str)
     moodle_filter_changed = Signal()
+    FIELD_HEIGHT = 36
+    FIELD_ROW_HEIGHT = 40
     ALL_MOODLE_FILTER_LABEL = "Все из файла"
     EMPTY_MOODLE_FILTER_LABEL = "Без инд. номера"
     SELECT_MOODLE_FILTER_LABEL = "Выберите инд. номер"
 
     def __init__(self, parent=None):
         super().__init__("Данные ведомости", parent)
+
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(256)
+        self.setMaximumHeight(256)
 
         self.subject_combo = self._combo()
         self.group_combo = self._combo()
@@ -37,27 +45,51 @@ class StatementForm(QGroupBox):
         self.selected_moodle_filters: set[str] = set()
         self.moodle_filter_edit = QLineEdit()
         self.moodle_filter_edit.setReadOnly(True)
+        self.moodle_filter_edit.setFixedHeight(self.FIELD_HEIGHT)
+        self.moodle_filter_edit.setAlignment(Qt.AlignVCenter)
         self.moodle_filter_menu = QMenu(self)
         self.moodle_filter_button = QToolButton()
         self.moodle_filter_button.setObjectName("fieldDropdownButton")
         self.moodle_filter_button.setText("⌄")
-        self.moodle_filter_button.setFixedSize(28, 36)
+        self.moodle_filter_button.setFixedSize(34, self.FIELD_HEIGHT)
         self.moodle_filter_button.setToolTip("Выбрать инд. номера Moodle")
         self.moodle_filter_button.clicked.connect(self._show_moodle_filter_menu)
         self.include_percent_checkbox = QCheckBox("Добавлять проценты в итоговую ведомость")
         self.include_percent_checkbox.setChecked(False)
 
-        layout = QFormLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        layout.addRow("По предмету:", self._field_row("subjects", self.subject_combo))
-        layout.addRow("Группа:", self._field_row("groups", self.group_combo))
-        layout.addRow("Специальность:", self._field_row("specialties", self.specialty_combo))
-        layout.addRow("Преподаватель:", self._field_row("teachers", self.teacher_combo))
-        layout.addRow("Инд. номер Moodle:", self._moodle_filter_row())
-        layout.addRow("", self.include_percent_checkbox)
+        layout = QGridLayout(self)
+        layout.setContentsMargins(18, 22, 18, 16)
+        layout.setHorizontalSpacing(14)
+        layout.setVerticalSpacing(10)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
+        layout.setColumnStretch(3, 1)
+        self._add_grid_row(layout, 0, 0, "По предмету:", self._field_row("subjects", self.subject_combo))
+        self._add_grid_row(layout, 0, 2, "Группа:", self._field_row("groups", self.group_combo))
+        self._add_grid_row(layout, 1, 0, "Специальность:", self._field_row("specialties", self.specialty_combo))
+        self._add_grid_row(layout, 1, 2, "Преподаватель:", self._field_row("teachers", self.teacher_combo))
+        self._add_grid_row(layout, 2, 0, "Инд. номер Moodle:", self._moodle_filter_row(), field_span=3)
+        layout.setRowMinimumHeight(3, 30)
+        layout.addWidget(self.include_percent_checkbox, 3, 1, 1, 3)
 
-        self.group_combo.currentTextChanged.connect(self.moodle_filter_changed.emit)
+        self.group_combo.currentTextChanged.connect(lambda _text: self.moodle_filter_changed.emit())
+
+    def _add_grid_row(
+        self,
+        layout: QGridLayout,
+        row_index: int,
+        column_index: int,
+        label_text: str,
+        field_widget: QWidget,
+        field_span: int = 1,
+    ) -> None:
+        label = QLabel(label_text, self)
+        label.setMinimumWidth(140)
+        label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        layout.setRowMinimumHeight(row_index, self.FIELD_ROW_HEIGHT)
+        layout.addWidget(label, row_index, column_index)
+        layout.addWidget(field_widget, row_index, column_index + 1, 1, field_span)
 
     @staticmethod
     def _combo() -> QComboBox:
@@ -65,6 +97,11 @@ class StatementForm(QGroupBox):
         combo.setEditable(True)
         combo.setInsertPolicy(QComboBox.NoInsert)
         combo.setMaxVisibleItems(12)
+        combo.setFixedHeight(StatementForm.FIELD_HEIGHT)
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        if combo.lineEdit():
+            combo.lineEdit().setFixedHeight(StatementForm.FIELD_HEIGHT - 2)
+            combo.lineEdit().setAlignment(Qt.AlignVCenter)
 
         completer = QCompleter(combo)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
@@ -75,6 +112,8 @@ class StatementForm(QGroupBox):
 
     def _field_row(self, directory: str, combo: QComboBox) -> QWidget:
         row = QWidget(self)
+        row.setFixedHeight(self.FIELD_ROW_HEIGHT)
+        row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -82,13 +121,13 @@ class StatementForm(QGroupBox):
         dropdown_button = QToolButton(row)
         dropdown_button.setObjectName("fieldDropdownButton")
         dropdown_button.setText("⌄")
-        dropdown_button.setFixedSize(28, 36)
+        dropdown_button.setFixedSize(34, self.FIELD_HEIGHT)
         dropdown_button.setToolTip("Открыть список")
         dropdown_button.clicked.connect(combo.showPopup)
 
         add_button = QPushButton("+", row)
         add_button.setObjectName("fieldAddButton")
-        add_button.setFixedSize(36, 36)
+        add_button.setFixedSize(40, self.FIELD_HEIGHT)
         add_button.setToolTip("Добавить текущее значение в справочник")
         add_button.clicked.connect(partial(self._request_add_value, directory, combo))
 
@@ -102,6 +141,8 @@ class StatementForm(QGroupBox):
 
     def _moodle_filter_row(self) -> QWidget:
         row = QWidget(self)
+        row.setFixedHeight(self.FIELD_ROW_HEIGHT)
+        row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)

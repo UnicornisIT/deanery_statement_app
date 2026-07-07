@@ -22,7 +22,14 @@ INSERT INTO subjects (name) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO student_groups (name) VALUES
-('ОФО-л26'),
+('ФМ-101'),
+('ФМ-102'),
+('ФМ-103'),
+('ФМ-104'),
+('ФМ-105'),
+('ФМ-106'),
+('ФМ-107'),
+('ФМ-108'),
 ('СД-101'),
 ('ЛД-101')
 ON CONFLICT (name) DO NOTHING;
@@ -30,7 +37,11 @@ ON CONFLICT (name) DO NOTHING;
 INSERT INTO specialties (name) VALUES
 ('Сестринское дело'),
 ('Лечебное дело'),
-('Фармация')
+('Фармация'),
+('Стоматология профилактическая'),
+('Стоматология ортопедическая'),
+('Стоматологое дело'),
+('Акушерское дело')
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO teachers (full_name) VALUES
