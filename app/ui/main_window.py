@@ -118,9 +118,10 @@ class MainWindow(QMainWindow):
         self.template_button = QPushButton("Шаблон")
         self.grade_rules_button = QPushButton("Оценки")
         self.mode_combo = QComboBox()
+        self.mode_combo.setObjectName("modeCombo")
         self.mode_combo.addItems(["ИФО", "ОФО"])
         self.mode_combo.setCurrentText(self.mode)
-        self.mode_combo.setFixedWidth(92)
+        self.mode_combo.setFixedWidth(104)
         self.mode_combo.setFixedHeight(34)
 
         for button, width in (
@@ -175,6 +176,7 @@ class MainWindow(QMainWindow):
             "href=\"https://t.me/unicornis_pulse\">t.me/unicornis_pulse</a>"
         )
 
+        self._apply_button_roles()
         self._build_menu()
         self._build_layout()
         self._connect_signals()
@@ -268,10 +270,33 @@ class MainWindow(QMainWindow):
         layout.addWidget(close_button, alignment=Qt.AlignRight)
         dialog.exec()
 
+    def _apply_button_roles(self) -> None:
+        primary_buttons = (self.choose_button, self.generate_button)
+        secondary_buttons = (
+            self.open_button,
+            self.export_pdf_button,
+            self.package_button,
+            self.reload_dict_button,
+            self.history_button,
+            self.template_button,
+            self.grade_rules_button,
+        )
+        tertiary_buttons = (self.print_button, self.open_folder_button)
+
+        for button in primary_buttons:
+            button.setProperty("role", "primary")
+        for button in secondary_buttons:
+            button.setProperty("role", "secondary")
+        for button in tertiary_buttons:
+            button.setProperty("role", "tertiary")
+        for button in (*primary_buttons, *secondary_buttons, *tertiary_buttons):
+            button.style().unpolish(button)
+            button.style().polish(button)
+
     def _build_layout(self) -> None:
         central = QWidget(self)
         root = QVBoxLayout(central)
-        root.setContentsMargins(14, 12, 14, 12)
+        root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(8)
 
         file_row = QHBoxLayout()
@@ -285,6 +310,7 @@ class MainWindow(QMainWindow):
         root.addLayout(file_row)
 
         mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
         mode_row.addStretch(1)
         self.mode_label = QLabel("Режим:")
         self.mode_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -308,7 +334,7 @@ class MainWindow(QMainWindow):
         actions_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         actions = QHBoxLayout(actions_bar)
-        actions.setContentsMargins(0, 4, 0, 4)
+        actions.setContentsMargins(0, 8, 0, 8)
         actions.setSpacing(8)
         actions.addWidget(self.generate_button)
         actions.addWidget(self.open_button)
@@ -348,6 +374,7 @@ class MainWindow(QMainWindow):
     def _set_document_actions_enabled(self, enabled: bool) -> None:
         self.open_button.setEnabled(enabled)
         self.export_pdf_button.setEnabled(enabled)
+        self.package_button.setEnabled(enabled)
         self.print_button.setEnabled(enabled)
         self.open_folder_button.setEnabled(enabled)
 
@@ -523,6 +550,8 @@ class MainWindow(QMainWindow):
             return
 
         self.current_excel_path = Path(file_path)
+        self.current_docx_path = None
+        self._set_document_actions_enabled(False)
         self.path_edit.setText(str(self.current_excel_path))
         logger.info("Выбран Excel-файл: %s", self.current_excel_path)
         self._start_excel_loading(self.current_excel_path)
@@ -590,7 +619,7 @@ class MainWindow(QMainWindow):
         self.menuBar().setEnabled(not loading)
         self.choose_button.setEnabled(not loading)
         self.generate_button.setEnabled(not loading)
-        self.package_button.setEnabled(not loading)
+        self.package_button.setEnabled(not loading and bool(self.current_docx_path))
         self.mode_combo.setEnabled(not loading)
         if loading:
             self.loading_overlay.start(message)

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QDateEdit,
     QHeaderView,
-    QItemDelegate,
+    QStyle,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
 )
@@ -12,7 +14,19 @@ from PySide6.QtWidgets import (
 from app.services.docx_generator import StatementStudent
 
 
-class DateDelegate(QItemDelegate):
+class RowHoverDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index) -> None:
+        table = self.parent()
+        if (
+            hasattr(table, "hovered_row")
+            and index.row() == table.hovered_row
+            and not option.state & QStyle.State_Selected
+        ):
+            option.backgroundBrush = QColor("#2B353C")
+        super().paint(painter, option, index)
+
+
+class DateDelegate(RowHoverDelegate):
     def createEditor(self, parent, option, index):
         editor = QDateEdit(parent)
         editor.setCalendarPopup(True)
@@ -20,10 +34,6 @@ class DateDelegate(QItemDelegate):
         editor.setDate(QDate.currentDate())
         editor.setMinimumDate(QDate(1900, 1, 1))
         editor.setMaximumDate(QDate(2100, 12, 31))
-        editor.setStyleSheet(
-            "QDateEdit { border: 1px solid #4f5b93; border-radius: 6px; padding: 2px 6px; }"
-            "QDateEdit::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 18px; }"
-        )
         return editor
 
     def setEditorData(self, editor, index):
@@ -48,9 +58,15 @@ class PreviewTable(QTableWidget):
         self.setHorizontalHeaderLabels(self.HEADERS)
         self.verticalHeader().setVisible(False)
         self.setAlternatingRowColors(True)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.setShowGrid(True)
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setEditTriggers(QTableWidget.AllEditTriggers)
+        self.hovered_row = -1
+        self.setItemDelegate(RowHoverDelegate(self))
         self.setItemDelegateForColumn(3, DateDelegate(self))
+        self.entered.connect(self._set_hovered_index)
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -58,6 +74,29 @@ class PreviewTable(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.rowCount() != 0:
+            return
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QColor("#9BA8AF"))
+        painter.drawText(
+            self.viewport().rect(),
+            Qt.AlignCenter,
+            "Выберите файл, чтобы увидеть данные",
+        )
+
+    def leaveEvent(self, event) -> None:
+        self.hovered_row = -1
+        self.viewport().update()
+        super().leaveEvent(event)
+
+    def _set_hovered_index(self, index) -> None:
+        self.hovered_row = index.row() if index.isValid() else -1
+        self.viewport().update()
 
     def set_students(self, students: list[StatementStudent]) -> None:
         self.setRowCount(len(students))

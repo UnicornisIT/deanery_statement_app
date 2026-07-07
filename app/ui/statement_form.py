@@ -51,22 +51,30 @@ class StatementForm(QGroupBox):
         self.department_head_combo = self._combo()
         self.control_form_combo.setEditText("диф.зачет")
         self.ofo_widgets: list[QWidget] = []
+        self.field_labels: list[QLabel] = []
+        self.field_rows: list[QWidget] = []
+        self.field_dropdown_buttons: list[QToolButton] = []
+        self.field_add_buttons: list[QPushButton] = []
         self.moodle_filter_values: list[str] = []
         self.selected_moodle_filters: set[str] = set()
         self.moodle_filter_edit = QLineEdit()
+        self.moodle_filter_edit.setMinimumWidth(0)
         self.moodle_filter_edit.setReadOnly(True)
         self.moodle_filter_edit.setFixedHeight(self.FIELD_HEIGHT)
         self.moodle_filter_edit.setAlignment(Qt.AlignVCenter)
         self.moodle_filter_menu = QMenu(self)
         self.moodle_filter_button = QToolButton()
         self.moodle_filter_button.setObjectName("fieldDropdownButton")
-        self.moodle_filter_button.setText("⌄")
-        self.moodle_filter_button.setFixedSize(34, self.FIELD_HEIGHT)
+        self.moodle_filter_button.setText("...")
+        self.moodle_filter_button.setFixedSize(32, 32)
+        self.field_dropdown_buttons.append(self.moodle_filter_button)
         self.moodle_filter_button.setToolTip("Выбрать инд. номера Moodle")
         self.moodle_filter_button.clicked.connect(self._show_moodle_filter_menu)
 
         self.test_started_filter = QComboBox()
+        self.test_started_filter.setObjectName("dateFilterCombo")
         self.test_started_filter.setFixedHeight(self.FIELD_HEIGHT)
+        self.test_started_filter.setMinimumWidth(128)
         self.test_started_filter.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.test_started_filter.setEditable(False)
         self.test_started_filter.addItem("Все даты")
@@ -76,9 +84,9 @@ class StatementForm(QGroupBox):
         self.include_percent_checkbox.setChecked(False)
 
         self.form_layout = QGridLayout(self)
-        self.form_layout.setContentsMargins(18, 22, 18, 16)
-        self.form_layout.setHorizontalSpacing(14)
-        self.form_layout.setVerticalSpacing(10)
+        self.form_layout.setContentsMargins(16, 24, 16, 16)
+        self.form_layout.setHorizontalSpacing(16)
+        self.form_layout.setVerticalSpacing(8)
         self.form_layout.setColumnStretch(0, 0)
         self.form_layout.setColumnStretch(1, 1)
         self.form_layout.setColumnStretch(2, 0)
@@ -95,6 +103,7 @@ class StatementForm(QGroupBox):
         self.moodle_filter_label = QLabel("Инд. номер Moodle:", self)
         self.moodle_filter_label.setMinimumWidth(140)
         self.moodle_filter_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.field_labels.append(self.moodle_filter_label)
         self.moodle_filter_container = self._moodle_filter_row()
         self.form_layout.addWidget(self.moodle_filter_label, 5, 0)
         self.form_layout.addWidget(self.moodle_filter_container, 5, 1, 1, 3)
@@ -103,6 +112,7 @@ class StatementForm(QGroupBox):
 
         self.group_combo.currentTextChanged.connect(lambda _text: self.moodle_filter_changed.emit())
         self.set_mode("ИФО")
+        self._apply_responsive_density()
 
     def _add_grid_row(
         self,
@@ -116,6 +126,7 @@ class StatementForm(QGroupBox):
         label = QLabel(label_text, self)
         label.setMinimumWidth(140)
         label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.field_labels.append(label)
         layout.setRowMinimumHeight(row_index, self.FIELD_ROW_HEIGHT)
         layout.addWidget(label, row_index, column_index)
         layout.addWidget(field_widget, row_index, column_index + 1, 1, field_span)
@@ -132,6 +143,7 @@ class StatementForm(QGroupBox):
         label = QLabel(label_text, self)
         label.setMinimumWidth(140)
         label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.field_labels.append(label)
         layout.setRowMinimumHeight(row_index, self.FIELD_ROW_HEIGHT)
         layout.addWidget(label, row_index, column_index)
         layout.addWidget(field_widget, row_index, column_index + 1, 1, field_span)
@@ -144,8 +156,10 @@ class StatementForm(QGroupBox):
         combo.setInsertPolicy(QComboBox.NoInsert)
         combo.setMaxVisibleItems(12)
         combo.setFixedHeight(StatementForm.FIELD_HEIGHT)
+        combo.setMinimumWidth(0)
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         if combo.lineEdit():
+            combo.lineEdit().setMinimumWidth(0)
             combo.lineEdit().setFixedHeight(StatementForm.FIELD_HEIGHT - 2)
             combo.lineEdit().setAlignment(Qt.AlignVCenter)
 
@@ -174,6 +188,7 @@ class StatementForm(QGroupBox):
         edit.setMinimumDate(QDate(1900, 1, 1))
         edit.setMaximumDate(QDate(2100, 12, 31))
         edit.setFixedHeight(StatementForm.FIELD_HEIGHT)
+        edit.setMinimumWidth(0)
         edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         edit.setAlignment(Qt.AlignVCenter)
         edit.setToolTip("Введите дату вручную или выберите в календаре")
@@ -200,24 +215,52 @@ class StatementForm(QGroupBox):
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_responsive_density()
+
+    def _apply_responsive_density(self) -> None:
+        compact = self.width() < 1180
+        label_width = 112 if compact else 140
+        grid_spacing = 10 if compact else 16
+        row_spacing = 4 if compact else 8
+        dropdown_width = 30 if compact else 32
+        add_width = 30 if compact else 40
+
+        self.form_layout.setHorizontalSpacing(grid_spacing)
+        for label in self.field_labels:
+            label.setMinimumWidth(label_width)
+        for row in self.field_rows:
+            layout = row.layout()
+            if layout is not None:
+                layout.setSpacing(row_spacing)
+        for button in self.field_dropdown_buttons:
+            button.setFixedSize(dropdown_width, dropdown_width)
+        for button in self.field_add_buttons:
+            button.setFixedSize(add_width, self.FIELD_HEIGHT)
+
     def _field_row(self, directory: str, combo: QComboBox) -> QWidget:
         row = QWidget(self)
+        row.setMinimumWidth(0)
         row.setFixedHeight(self.FIELD_ROW_HEIGHT)
         row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.field_rows.append(row)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
         dropdown_button = QToolButton(row)
         dropdown_button.setObjectName("fieldDropdownButton")
-        dropdown_button.setText("⌄")
-        dropdown_button.setFixedSize(34, self.FIELD_HEIGHT)
+        dropdown_button.setText("...")
+        dropdown_button.setFixedSize(32, 32)
+        self.field_dropdown_buttons.append(dropdown_button)
         dropdown_button.setToolTip("Открыть список")
         dropdown_button.clicked.connect(combo.showPopup)
 
         add_button = QPushButton("+", row)
         add_button.setObjectName("fieldAddButton")
         add_button.setFixedSize(40, self.FIELD_HEIGHT)
+        self.field_add_buttons.append(add_button)
         add_button.setToolTip("Добавить текущее значение в справочник")
         add_button.clicked.connect(partial(self._request_add_value, directory, combo))
 
@@ -231,11 +274,13 @@ class StatementForm(QGroupBox):
 
     def _moodle_filter_row(self) -> QWidget:
         row = QWidget(self)
+        row.setMinimumWidth(0)
         row.setFixedHeight(self.FIELD_ROW_HEIGHT)
         row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.field_rows.append(row)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
         layout.addWidget(self.moodle_filter_edit, stretch=1)
         layout.addWidget(self.moodle_filter_button)
         layout.addWidget(QLabel("Дата:"), alignment=Qt.AlignVCenter)

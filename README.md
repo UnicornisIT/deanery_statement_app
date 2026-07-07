@@ -149,6 +149,7 @@ dist\DeaneryStatementApp\DeaneryStatementApp.exe
 ## Тесты
 
 ```bat
+pip install -r requirements-dev.txt
 pytest
 ```
 
