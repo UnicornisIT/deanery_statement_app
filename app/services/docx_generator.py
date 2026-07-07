@@ -15,7 +15,7 @@ from app.services.grade_service import GradeResult
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class StatementStudent:
     number: int
     full_name: str
@@ -24,6 +24,7 @@ class StatementStudent:
     individual_number: str = ""
     test_started: str = ""
     note: str = ""
+    source_row: int | None = None
 
 
 @dataclass(frozen=True)

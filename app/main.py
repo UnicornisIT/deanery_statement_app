@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.config import load_config
 from app.logging_config import setup_logging
-from app.ui.main_window import MainWindow
+from app.ui.main_window import MainWindow, ModeSelectionDialog
 
 
 def main() -> int:
@@ -30,7 +30,11 @@ def main() -> int:
     except Exception:
         logging.exception("Не удалось загрузить стили")
 
-    window = MainWindow(config)
+    mode_dialog = ModeSelectionDialog()
+    if not mode_dialog.exec():
+        return 0
+
+    window = MainWindow(config, mode=mode_dialog.selected_mode or "ИФО")
     window.show()
     return app.exec()
 

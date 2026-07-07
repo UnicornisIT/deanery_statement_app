@@ -14,7 +14,7 @@ from app.config import ExcelSettings
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class StudentResult:
     full_name: str
     percent: Decimal
@@ -262,8 +262,8 @@ class ExcelParser:
         middle_parts = self._split_name(middle_raw)
 
         if self.settings.swap_first_last_names:
-            surname_parts = first_parts
-            name_parts = last_parts
+            surname_parts = last_parts
+            name_parts = first_parts
         else:
             surname_parts = last_parts
             name_parts = first_parts

@@ -6,12 +6,12 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QPoint, QThread, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSizePolicy,
+    QMenu,
     QVBoxLayout,
     QWidget,
 )
@@ -43,11 +44,46 @@ from app.ui.statement_form import StatementForm
 logger = logging.getLogger(__name__)
 
 
+class ModeSelectionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_mode = ""
+        self.setWindowTitle("Выберите режим ведомости")
+        self.resize(360, 160)
+        self.setModal(True)
+
+        title_label = QLabel("Выберите режим работы:", self)
+        title_label.setAlignment(Qt.AlignCenter)
+
+        ifo_button = QPushButton("ИФО", self)
+        ifo_button.clicked.connect(lambda: self._select_mode("ИФО"))
+        ifo_button.setToolTip("Открыть окно для очно-заочной формы обучения")
+
+        ofo_button = QPushButton("ОФО", self)
+        ofo_button.clicked.connect(lambda: self._select_mode("ОФО"))
+        ofo_button.setToolTip("Открыть окно для очной формы обучения")
+
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addWidget(ifo_button)
+        buttons_layout.addWidget(ofo_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+        layout.addWidget(title_label)
+        layout.addLayout(buttons_layout)
+
+    def _select_mode(self, mode: str) -> None:
+        self.selected_mode = mode
+        self.accept()
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, mode: str = "ИФО"):
         super().__init__()
         self.config = config
-        self.setWindowTitle("Формирование ведомостей из Moodle")
+        self.mode = mode
+        self.setWindowTitle(f"Формирование ведомостей из Moodle — {self.mode}")
         self.resize(1100, 720)
 
         self.db = DatabaseConnection(config.database)
@@ -98,6 +134,7 @@ class MainWindow(QMainWindow):
             button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.form = StatementForm()
+        self.form.setTitle(f"Данные ведомости ({self.mode})")
         self.preview_search_edit = QLineEdit()
         self.preview_search_edit.setPlaceholderText("Поиск в предпросмотре")
         self.preview_grade_filter = QComboBox()
@@ -237,6 +274,9 @@ class MainWindow(QMainWindow):
         file_row.addWidget(self.path_edit, stretch=1)
         root.addLayout(file_row)
 
+        self.mode_label = QLabel(f"Режим: {self.mode}")
+        self.mode_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        root.addWidget(self.mode_label)
         root.addWidget(self.form)
 
         preview_tools = QHBoxLayout()
@@ -244,6 +284,7 @@ class MainWindow(QMainWindow):
         preview_tools.addWidget(QLabel("Предварительный просмотр:"))
         preview_tools.addStretch(1)
         preview_tools.addWidget(self.preview_search_edit)
+        preview_tools.addWidget(QLabel("Оценка:"))
         preview_tools.addWidget(self.preview_grade_filter)
         root.addLayout(preview_tools)
         root.addWidget(self.preview_table, stretch=1)
@@ -283,8 +324,11 @@ class MainWindow(QMainWindow):
         self.reload_dict_button.clicked.connect(self.open_directory_manager)
         self.form.add_value_requested.connect(self.add_current_directory_value)
         self.form.moodle_filter_changed.connect(self.apply_student_filter)
+        self.form.test_started_changed.connect(self.apply_student_filter)
         self.preview_search_edit.textChanged.connect(self.apply_preview_filter)
         self.preview_grade_filter.currentTextChanged.connect(self.apply_preview_filter)
+        self.preview_table.horizontalHeader().sectionClicked.connect(self._handle_preview_header_clicked)
+        self.preview_table.itemChanged.connect(self._handle_preview_item_changed)
 
     def _set_document_actions_enabled(self, enabled: bool) -> None:
         self.open_button.setEnabled(enabled)
@@ -558,10 +602,79 @@ class MainWindow(QMainWindow):
         else:
             source_students = self.parsed_students
 
+        selected_date = self.form.get_test_started_date()
+        if selected_date:
+            source_students = [
+                student
+                for student in source_students
+                if self._normalize_test_started_date(student.test_started) == selected_date
+            ]
+
         self.statement_students, preview_students = self._build_attempt_views(source_students)
-        self.preview_table.set_students(preview_students)
+        self.preview_table.blockSignals(True)
+        try:
+            self.preview_table.set_students(preview_students)
+        finally:
+            self.preview_table.blockSignals(False)
+        self.form.set_test_started_options(self._available_test_started_dates())
         self._update_validation(source_students, preview_students)
         self.apply_preview_filter()
+
+    def _handle_preview_header_clicked(self, section: int) -> None:
+        if section != 3:
+            return
+        menu = QMenu(self.preview_table)
+        selected_date = self.form.get_test_started_date()
+        action_all = menu.addAction("Все даты")
+        action_all.setCheckable(True)
+        action_all.setChecked(selected_date is None)
+        action_all.triggered.connect(lambda: self.form.set_test_started_date(None))
+        menu.addSeparator()
+
+        dates = self._available_test_started_dates()
+        for date in dates:
+            action = menu.addAction(date)
+            action.setCheckable(True)
+            action.setChecked(date == selected_date)
+            action.triggered.connect(lambda checked, date=date: self.form.set_test_started_date(date))
+
+        header = self.preview_table.horizontalHeader()
+        header_point = header.mapToGlobal(header.rect().topLeft() + QPoint(header.sectionPosition(section), header.height()))
+        menu.exec(header_point)
+
+    def _available_test_started_dates(self) -> list[str]:
+        values: list[str] = []
+        for row in range(self.preview_table.rowCount()):
+            item = self.preview_table.item(row, 3)
+            if not item:
+                continue
+            text = item.text().strip()
+            normalized = self._normalize_test_started_date(text)
+            if not normalized:
+                continue
+            if normalized not in values:
+                values.append(normalized)
+        return sorted(values, key=lambda value: value)
+
+    @staticmethod
+    def _normalize_test_started_date(value: str) -> str | None:
+        if not value:
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        if "." in text and len(text) == 5:
+            parts = text.split(".")
+            if len(parts) == 2 and all(part.isdigit() for part in parts):
+                day, month = parts
+                return f"{day.zfill(2)}.{month.zfill(2)}.{datetime.now().year}"
+        try:
+            parsed = MainWindow._parse_moodle_datetime(text)
+            if parsed == datetime.min:
+                return None
+            return parsed.strftime("%d.%m.%Y")
+        except Exception:
+            return None
 
     def apply_preview_filter(self, *_args) -> None:
         query = self.preview_search_edit.text().strip().casefold()
@@ -576,6 +689,29 @@ class MainWindow(QMainWindow):
             matches_query = not query or query in row_text
             matches_grade = grade_filter == "Все оценки" or grade_text.startswith(grade_filter)
             self.preview_table.setRowHidden(row, not (matches_query and matches_grade))
+
+    def _handle_preview_item_changed(self, item) -> None:
+        if item.column() != 3:
+            return
+
+        student = item.data(Qt.UserRole)
+        if not hasattr(student, "test_started"):
+            return
+
+        new_value = item.text().strip()
+        student.test_started = new_value
+
+        if getattr(student, "source_row", None) is not None:
+            for parsed_student in self.parsed_students:
+                if parsed_student.source_row == student.source_row:
+                    parsed_student.test_started = new_value
+                    break
+
+        self.preview_table.blockSignals(True)
+        try:
+            self.preview_table.set_students(self._build_attempt_views(self.parsed_students)[1])
+        finally:
+            self.preview_table.blockSignals(False)
 
     def _update_validation(
         self,
@@ -672,6 +808,7 @@ class MainWindow(QMainWindow):
             individual_number=student.individual_number,
             test_started=student.test_started,
             note=note,
+            source_row=student.source_row,
         )
 
     @staticmethod
@@ -699,7 +836,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _parse_moodle_datetime(value: str) -> datetime:
-        months = {
+        if value is None:
+            return datetime.min
+
+        text = str(value).strip()
+        if not text:
+            return datetime.min
+
+        normalized = text.replace("\u00a0", " ").strip()
+        month_map = {
             "января": 1,
             "февраля": 2,
             "марта": 3,
@@ -713,19 +858,33 @@ class MainWindow(QMainWindow):
             "ноября": 11,
             "декабря": 12,
         }
-        match = re.search(
-            r"(\d{1,2})\s+([а-яё]+)\s+(\d{4})\s+(\d{1,2}):(\d{2})",
-            value.strip().casefold(),
-        )
-        if not match:
+
+        for pattern in (
+            r"(\d{1,2})\s+([а-яё]+)\s+(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?",
+            r"(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?",
+            r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})\s*(\d{1,2}):(\d{2})(?::(\d{2}))?",
+        ):
+            match = re.fullmatch(pattern, normalized.casefold())
+            if not match:
+                continue
+            if pattern.startswith(r"(\d{1,2})\s"):
+                day, month_name, year, hour, minute, second = match.groups()
+                month = month_map.get(month_name)
+                if not month:
+                    continue
+                second_value = int(second or 0)
+                return datetime(int(year), month, int(day), int(hour), int(minute), second_value)
+            if pattern.startswith(r"(\d{4})"):
+                year, month, day, hour, minute, second = match.groups()
+                return datetime(int(year), int(month), int(day), int(hour), int(minute), int(second or 0))
+            day, month, year, hour, minute, second = match.groups()
+            return datetime(int(year), int(month), int(day), int(hour), int(minute), int(second or 0))
+
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
             return datetime.min
 
-        day, month_name, year, hour, minute = match.groups()
-        month = months.get(month_name)
-        if not month:
-            return datetime.min
-
-        return datetime(int(year), month, int(day), int(hour), int(minute))
 
     def _build_statement_students(self, students: list[StudentResult]) -> list[StatementStudent]:
         statement_students: list[StatementStudent] = []

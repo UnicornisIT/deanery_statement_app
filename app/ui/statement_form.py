@@ -30,6 +30,8 @@ class StatementForm(QGroupBox):
     EMPTY_MOODLE_FILTER_LABEL = "Без инд. номера"
     SELECT_MOODLE_FILTER_LABEL = "Выберите инд. номер"
 
+    test_started_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__("Данные ведомости", parent)
 
@@ -41,6 +43,12 @@ class StatementForm(QGroupBox):
         self.group_combo = self._combo()
         self.specialty_combo = self._combo()
         self.teacher_combo = self._combo()
+        self.semester_edit = self._line_edit()
+        self.academic_year_edit = self._line_edit()
+        self.control_form_edit = self._line_edit("диф.зачет")
+        self.exam_date_edit = self._line_edit()
+        self.department_head_edit = self._line_edit()
+        self.ofo_widgets: list[QWidget] = []
         self.moodle_filter_values: list[str] = []
         self.selected_moodle_filters: set[str] = set()
         self.moodle_filter_edit = QLineEdit()
@@ -54,6 +62,14 @@ class StatementForm(QGroupBox):
         self.moodle_filter_button.setFixedSize(34, self.FIELD_HEIGHT)
         self.moodle_filter_button.setToolTip("Выбрать инд. номера Moodle")
         self.moodle_filter_button.clicked.connect(self._show_moodle_filter_menu)
+
+        self.test_started_filter = QComboBox()
+        self.test_started_filter.setFixedHeight(self.FIELD_HEIGHT)
+        self.test_started_filter.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.test_started_filter.setEditable(False)
+        self.test_started_filter.addItem("Все даты")
+        self.test_started_filter.currentTextChanged.connect(self._emit_test_started_changed)
+
         self.include_percent_checkbox = QCheckBox("Добавлять проценты в итоговую ведомость")
         self.include_percent_checkbox.setChecked(False)
 
@@ -70,10 +86,16 @@ class StatementForm(QGroupBox):
         self._add_grid_row(layout, 1, 0, "Специальность:", self._field_row("specialties", self.specialty_combo))
         self._add_grid_row(layout, 1, 2, "Преподаватель:", self._field_row("teachers", self.teacher_combo))
         self._add_grid_row(layout, 2, 0, "Инд. номер Moodle:", self._moodle_filter_row(), field_span=3)
-        layout.setRowMinimumHeight(3, 30)
-        layout.addWidget(self.include_percent_checkbox, 3, 1, 1, 3)
+        self._add_ofo_grid_row(layout, 3, 0, "Семестр:", self.semester_edit)
+        self._add_ofo_grid_row(layout, 3, 2, "Учебный год:", self.academic_year_edit)
+        self._add_ofo_grid_row(layout, 4, 0, "Форма контроля:", self.control_form_edit)
+        self._add_ofo_grid_row(layout, 4, 2, "Дата проведения:", self.exam_date_edit)
+        self._add_ofo_grid_row(layout, 5, 0, "Зав. отделением:", self.department_head_edit, field_span=3)
+        layout.setRowMinimumHeight(6, 30)
+        layout.addWidget(self.include_percent_checkbox, 6, 1, 1, 3)
 
         self.group_combo.currentTextChanged.connect(lambda _text: self.moodle_filter_changed.emit())
+        self.set_mode("ИФО")
 
     def _add_grid_row(
         self,
@@ -90,6 +112,23 @@ class StatementForm(QGroupBox):
         layout.setRowMinimumHeight(row_index, self.FIELD_ROW_HEIGHT)
         layout.addWidget(label, row_index, column_index)
         layout.addWidget(field_widget, row_index, column_index + 1, 1, field_span)
+
+    def _add_ofo_grid_row(
+        self,
+        layout: QGridLayout,
+        row_index: int,
+        column_index: int,
+        label_text: str,
+        field_widget: QWidget,
+        field_span: int = 1,
+    ) -> None:
+        label = QLabel(label_text, self)
+        label.setMinimumWidth(140)
+        label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        layout.setRowMinimumHeight(row_index, self.FIELD_ROW_HEIGHT)
+        layout.addWidget(label, row_index, column_index)
+        layout.addWidget(field_widget, row_index, column_index + 1, 1, field_span)
+        self.ofo_widgets.extend([label, field_widget])
 
     @staticmethod
     def _combo() -> QComboBox:
@@ -109,6 +148,23 @@ class StatementForm(QGroupBox):
         completer.setFilterMode(Qt.MatchContains)
         combo.setCompleter(completer)
         return combo
+
+    @staticmethod
+    def _line_edit(default_text: str = "") -> QLineEdit:
+        edit = QLineEdit()
+        edit.setFixedHeight(StatementForm.FIELD_HEIGHT)
+        edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        edit.setText(default_text)
+        edit.setAlignment(Qt.AlignVCenter)
+        return edit
+
+    def set_mode(self, mode: str) -> None:
+        is_ofo = mode == "ОФО"
+        for widget in self.ofo_widgets:
+            widget.setVisible(is_ofo)
+        height = 376 if is_ofo else 256
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
 
     def _field_row(self, directory: str, combo: QComboBox) -> QWidget:
         row = QWidget(self)
@@ -148,6 +204,8 @@ class StatementForm(QGroupBox):
         layout.setSpacing(6)
         layout.addWidget(self.moodle_filter_edit, stretch=1)
         layout.addWidget(self.moodle_filter_button)
+        layout.addWidget(QLabel("Дата:"), alignment=Qt.AlignVCenter)
+        layout.addWidget(self.test_started_filter)
         return row
 
     def set_values(
@@ -195,6 +253,36 @@ class StatementForm(QGroupBox):
     def _show_moodle_filter_menu(self) -> None:
         self.moodle_filter_menu.popup(self.moodle_filter_button.mapToGlobal(self.moodle_filter_button.rect().bottomLeft()))
 
+    def _emit_test_started_changed(self) -> None:
+        self.test_started_changed.emit()
+
+    def get_test_started_date(self) -> str | None:
+        current = self.test_started_filter.currentText()
+        if not current or current == "Все даты":
+            return None
+        return current
+
+    def set_test_started_date(self, date_text: str | None) -> None:
+        selected = date_text or "Все даты"
+        if selected not in [self.test_started_filter.itemText(i) for i in range(self.test_started_filter.count())]:
+            self.test_started_filter.addItem(selected)
+        self.test_started_filter.blockSignals(True)
+        self.test_started_filter.setCurrentText(selected)
+        self.test_started_filter.blockSignals(False)
+        self.test_started_changed.emit()
+
+    def set_test_started_options(self, dates: list[str]) -> None:
+        selected = self.get_test_started_date() or "Все даты"
+        self.test_started_filter.blockSignals(True)
+        self.test_started_filter.clear()
+        self.test_started_filter.addItem("Все даты")
+        for date in dates:
+            self.test_started_filter.addItem(date)
+        self.test_started_filter.setCurrentText(selected)
+        if self.test_started_filter.currentText() != selected:
+            self.test_started_filter.setCurrentText("Все даты")
+        self.test_started_filter.blockSignals(False)
+
     def _rebuild_moodle_filter_menu(self) -> None:
         self.moodle_filter_menu.clear()
 
@@ -231,5 +319,10 @@ class StatementForm(QGroupBox):
             "group": self.group_combo.currentText().strip(),
             "specialty": self.specialty_combo.currentText().strip(),
             "teacher": self.teacher_combo.currentText().strip(),
+            "semester": self.semester_edit.text().strip(),
+            "academic_year": self.academic_year_edit.text().strip(),
+            "control_form": self.control_form_edit.text().strip(),
+            "exam_date": self.exam_date_edit.text().strip(),
+            "department_head": self.department_head_edit.text().strip(),
             "include_percent": self.include_percent_checkbox.isChecked(),
         }
