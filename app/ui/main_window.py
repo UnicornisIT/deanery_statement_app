@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
             "&#1048;&#1076;&#1077;&#1080; &#1080; "
             "&#1087;&#1088;&#1077;&#1076;&#1083;&#1086;&#1078;&#1077;&#1085;&#1080;&#1103;: "
             "<a style=\"color:#7dd3fc; text-decoration:none;\" "
-            "href=\"mailto:earov18@outlook.com\">earov18@outlook.com</a>"
+            "href=\"mailto:dev-eva@outlook.com\">dev-eva@outlook.com</a>"
             " &middot; Telegram: "
             "<a style=\"color:#7dd3fc; text-decoration:none;\" "
             "href=\"https://t.me/unicornis_pulse\">t.me/unicornis_pulse</a>"
@@ -237,7 +237,7 @@ class MainWindow(QMainWindow):
         message.setText(
             "Формирование ведомостей из Moodle<br><br>"
             "Разработчик: <a href=\"https://github.com/UnicornisIT\">UnicornisIT</a><br>"
-            "Почта: <a href=\"mailto:earov18@outlook.com\">earov18@outlook.com</a><br>"
+            "Почта: <a href=\"mailto:dev-eva@outlook.com\">dev-eva@outlook.com</a><br>"
             "Telegram: <a href=\"https://t.me/unicornis_pulse\">t.me/unicornis_pulse</a><br>"
             "GitHub: <a href=\"https://github.com/UnicornisIT\">github.com/UnicornisIT</a>"
         )

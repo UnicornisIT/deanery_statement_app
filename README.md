@@ -1303,6 +1303,6 @@ build_exe.bat
 
 Разработчик: [UnicornisIT](https://github.com/UnicornisIT)
 
-Идеи и предложения: [earov18@outlook.com](mailto:earov18@outlook.com)
+Идеи и предложения: [dev-eva@outlook.com](mailto:dev-eva@outlook.com)
 
 Telegram: [t.me/unicornis_pulse](https://t.me/unicornis_pulse)
