@@ -9,7 +9,7 @@
   "exam_date": "19.06.2026",
   "department_head": "Козлитина Светлана Геннадьевна",
   "include_percent": false,
-  "template_path_ifo": "C:\\Users\\EA-work\\Documents\\docx_to_moodle_app\\deanery_statement_app\\app\\templates\\statement_template_ifo_diff.docx",
-  "template_path": "C:\\Users\\EA-work\\Documents\\docx_to_moodle_app\\deanery_statement_app\\app\\templates\\statement_template_ifo_diff.docx",
+  "template_path_ifo": "C:\\Users\\EA-work\\Documents\\deanery_statement_app\\app\\templates\\statement_template_ifo_diff.docx",
+  "template_path": "C:\\Users\\EA-work\\Documents\\deanery_statement_app\\app\\templates\\statement_template_ifo_diff.docx",
   "template_path_ofo": "C:\\Users\\EA-work\\Documents\\docx_to_moodle_app\\deanery_statement_app\\app\\templates\\statement_template_ofo.docx"
 }
